@@ -443,10 +443,13 @@ static void SetDeviceUpdateIntervals(void) {
 
     DeviceManager_SetUpdateInterval(ID_ADC_CURRENT, 1);   // ADC 快速采样
     DeviceManager_SetUpdateInterval(ID_ADC_VOLTAGE, 1);   // ADC 快速采样
+    // ADC 电流/电压已改由 1ms 硬件中断驱动，关闭主循环轮询，避免双跑
+    DeviceManager_DisableUpdate(ID_ADC_CURRENT);
+    DeviceManager_DisableUpdate(ID_ADC_VOLTAGE);
 
     // 传感器设备使用较慢的更新间隔
     DeviceManager_SetUpdateInterval(ID_VOLTAGE_BUS, 1);    // 1ms 检测一次电压 (1ms节拍x连续30次越限=29ms确认窗)
-    DeviceManager_SetUpdateInterval(ID_SENSOR_CURRENT, 1); // 10ms 检测一次电流
+    DeviceManager_SetUpdateInterval(ID_SENSOR_CURRENT, 1); // 1ms 维护 100ms 平均电流与调试输出
     DeviceManager_SetUpdateInterval(ID_RTURN, 1);          // 1ms 更新一次角度
 }
 
@@ -611,6 +614,45 @@ static void ProcessDeviceUpdates(void) {
     DeviceManager_UpdateAll();
 }
 
+// ========== 过流事件延迟发布（1ms ISR 检测置位，主循环发布） ==========
+static void ProcessSensorPendingEvents(void) {
+    if (g_sensor_current_dev == NULL) return;
+
+    Sensor_AlarmState_t* pstcAlarm = &g_sensor_current_dev->stcAlarmState;
+
+    if (pstcAlarm->u8OcTriggerPending) {
+        pstcAlarm->u8OcTriggerPending = 0;
+        Current_AlarmEvent_t stcEvent;
+        stcEvent.s32CurrentMa = pstcAlarm->s32PendingCurrentMa;
+        stcEvent.s32ThresholdMa = pstcAlarm->s32PendingThresholdMa;
+        stcEvent.u8IsActive = 1;
+        EventBus_Publish(TOPIC_CURRENT_ALARM, &stcEvent);
+    }
+
+    if (pstcAlarm->u8OcReleasePending) {
+        pstcAlarm->u8OcReleasePending = 0;
+        Current_AlarmEvent_t stcEvent;
+        stcEvent.s32CurrentMa = pstcAlarm->s32PendingCurrentMa;
+        stcEvent.s32ThresholdMa = pstcAlarm->s32PendingThresholdMa;
+        stcEvent.u8IsActive = 0;
+        EventBus_Publish(TOPIC_CURRENT_ALARM, &stcEvent);
+    }
+}
+
+// ========== 1ms 心跳中断任务（TMR0_Unit2 CH A 调用） ==========
+void TMR0_Unit2_1msTask(void) {
+    /* ADC 均值 + 电流计算 + 过流检测，硬件 1ms 节拍内完成，不受主循环影响 */
+    if (g_adc_current_dev != NULL) {
+        (void)ADC_Device_Update(g_adc_current_dev);
+    }
+    if (g_adc_voltage_dev != NULL) {
+        (void)ADC_Device_Update(g_adc_voltage_dev);
+    }
+    if (g_sensor_current_dev != NULL) {
+        Sensor_Device_UpdateIsr(g_sensor_current_dev);
+    }
+}
+
 // ========== 系统初始化函数 ==========
 void ESystem_Init(void) {
     // 1. 先初始化 EventBus
@@ -642,11 +684,11 @@ void ESystem_Init(void) {
         Device_Init(i);
     }
 
-    // 6. 设置各设备的更新间隔
-    SetDeviceUpdateIntervals();
-
-    // 7. 启用所有设备的自动更新
+    // 6. 启用所有设备的自动更新
     DeviceManager_EnableAllUpdate();
+
+    // 7. 设置各设备的更新间隔（须在EnableAllUpdate之后，确保ADC主循环轮询保持禁用）
+    SetDeviceUpdateIntervals();
 
     // 8. 初始化绝对角度模块（在 param_manager 就绪后）
     RunAngle_Init();
@@ -742,6 +784,7 @@ void App_ReloadConfig(void)
 }
 
 void ESystem_MainLoop(void) {
+    ProcessSensorPendingEvents();   // 最顶部：ISR 置位后立即发布过流事件
     static uint32_t last_loop_time = 0;
     uint32_t now = tickTimer_GetCount();
 

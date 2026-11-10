@@ -6,10 +6,10 @@
 
 static uint8_t s_bAdpAdcInitialized = 0U;
 
-volatile int32_t g_dbg_current_raw_ma = 0;        // ԭʼADCֵ����ĵ���(mA)
-volatile int32_t g_dbg_current_filtered_ma = 0;   // EMA�˲���ĵ���(mA)
-volatile uint16_t g_dbg_current_raw_adc = 0;      // ԭʼADCֵ
-volatile uint16_t g_dbg_current_filtered_adc = 0; // EMA�˲����ADCֵ
+volatile int32_t g_dbg_current_raw_ma = 0;        // 原始ADC值换算的电流(mA)
+volatile int32_t g_dbg_current_filtered_ma = 0;   // 均值滤波后的电流(mA)
+volatile uint16_t g_dbg_current_raw_adc = 0;      // 原始ADC值
+volatile uint16_t g_dbg_current_filtered_adc = 0; // 均值滤波后的ADC值
 
 /* Callback context for ADC interrupt */
 typedef struct {
@@ -51,6 +51,18 @@ static void ADC_Device_OnDataReady(uint16_t u16AdcValue, uint8_t u8Channel)
                 if (pstcRing->u8Count < ADC_DEV_RAW_RING_SIZE) {
                     pstcRing->u8Count++;
                 }
+                /* 固定滑动平均：每来一个样本更新窗口和（窗口=3个电流纹波周期） */
+                if (pstcDev->u16MeanCount < ADC_MEAN_WINDOW_SAMPLES) {
+                    pstcDev->u32MeanSum += u16AdcValue;
+                    pstcDev->au16MeanWindow[pstcDev->u16MeanIndex] = u16AdcValue;
+                    pstcDev->u16MeanIndex = (uint16_t)((pstcDev->u16MeanIndex + 1) % ADC_MEAN_WINDOW_SAMPLES);
+                    pstcDev->u16MeanCount++;
+                } else {
+                    pstcDev->u32MeanSum -= pstcDev->au16MeanWindow[pstcDev->u16MeanIndex];
+                    pstcDev->u32MeanSum += u16AdcValue;
+                    pstcDev->au16MeanWindow[pstcDev->u16MeanIndex] = u16AdcValue;
+                    pstcDev->u16MeanIndex = (uint16_t)((pstcDev->u16MeanIndex + 1) % ADC_MEAN_WINDOW_SAMPLES);
+                }
             }
             break;
         }
@@ -78,16 +90,6 @@ static uint16_t ADC_Device_ReadRawFromRing(ADC_Device_t* pstcDev,
     return u16Read;
 }
 
-static uint16_t ADC_Filter_Mean(uint16_t* pu16Data, uint8_t u8Count)
-{
-    if (u8Count == 0) return 0;
-    uint32_t u32Sum = 0;
-    for (uint8_t i = 0; i < u8Count; i++) {
-        u32Sum += pu16Data[i];
-    }
-    return (uint16_t)(u32Sum / u8Count);
-}
-
 static uint16_t ADC_Filter_Median(uint16_t* pu16Data, uint8_t u8Count)
 {
     if (u8Count == 0) return 0;
@@ -107,66 +109,44 @@ static uint16_t ADC_Filter_Median(uint16_t* pu16Data, uint8_t u8Count)
     return au16Sorted[u8Count / 2];
 }
 
-/**
- * @brief First order low-pass filter (EMA)
- *        filtered = prev + alpha * (new - prev)
- *        alpha = 0.2 means new data contributes 20%
- */
-static uint16_t ADC_Filter_FirstOrder(ADC_Device_t* pstcDev, uint16_t u16NewValue)
-{
-    float fPrev = (float)pstcDev->stcFilter.u16FilteredValue;
-    float fNew = (float)u16NewValue;
-    float fAlpha = pstcDev->stcFilter.fAlpha;
-    
-    return (uint16_t)(fPrev + fAlpha * (fNew - fPrev));
-}
-
 static void ADC_Device_UpdateFilter(ADC_Device_t* pstcDev)
 {
     if (!pstcDev || !pstcDev->u8UseRawRing) return;
     
-    uint16_t au16RawData[ADC_DEV_RAW_RING_SIZE];
-    uint16_t u16Count = ADC_Device_ReadRawFromRing(pstcDev, au16RawData, ADC_DEV_RAW_RING_SIZE);
-    
-    if (u16Count == 0) return;
-    
-    uint16_t u16RawLatest = au16RawData[u16Count - 1];
-    
+    uint16_t u16RawLatest = 0;
+    if (pstcDev->u16MeanCount > 0) {
+        uint16_t u16LastIdx = (uint16_t)((pstcDev->u16MeanIndex + ADC_MEAN_WINDOW_SAMPLES - 1) % ADC_MEAN_WINDOW_SAMPLES);
+        u16RawLatest = pstcDev->au16MeanWindow[u16LastIdx];
+    }
+
     uint16_t u16Filtered = 0;
     uint8_t u8WindowSize = pstcDev->stcFilter.u8WindowSize;
-    
+
     switch (pstcDev->stcFilter.enType) {
         case ADC_FILTER_NONE:
-            u16Filtered = au16RawData[u16Count - 1];
+            u16Filtered = u16RawLatest;
             break;
-            
-        case ADC_FILTER_MEAN: {
-            uint8_t u8UseCount = (u16Count > u8WindowSize) ? u8WindowSize : u16Count;
-            uint16_t au16Window[ADC_FILTER_WINDOW_MAX];
-            for (uint8_t i = 0; i < u8UseCount; i++) {
-                au16Window[i] = au16RawData[u16Count - u8UseCount + i];
-            }
-            u16Filtered = ADC_Filter_Mean(au16Window, u8UseCount);
+
+        case ADC_FILTER_MEAN:
+            /* 固定N点滑动平均：窗口覆盖3个电流纹波周期，消除周期性抖动 */
+            if (pstcDev->u16MeanCount == 0) return;
+            u16Filtered = (uint16_t)(pstcDev->u32MeanSum / pstcDev->u16MeanCount);
             break;
-        }
-        
+
         case ADC_FILTER_MEDIAN: {
-            uint8_t u8UseCount = (u16Count > u8WindowSize) ? u8WindowSize : u16Count;
+            uint8_t u8UseCount = (pstcDev->u16MeanCount > u8WindowSize) ? u8WindowSize : (uint8_t)pstcDev->u16MeanCount;
+            if (u8UseCount == 0) return;
             uint16_t au16Window[ADC_FILTER_WINDOW_MAX];
+            uint16_t u16Start = (uint16_t)((pstcDev->u16MeanIndex + ADC_MEAN_WINDOW_SAMPLES - u8UseCount) % ADC_MEAN_WINDOW_SAMPLES);
             for (uint8_t i = 0; i < u8UseCount; i++) {
-                au16Window[i] = au16RawData[u16Count - u8UseCount + i];
+                au16Window[i] = pstcDev->au16MeanWindow[(uint16_t)((u16Start + i) % ADC_MEAN_WINDOW_SAMPLES)];
             }
             u16Filtered = ADC_Filter_Median(au16Window, u8UseCount);
             break;
         }
-        
-        case ADC_FILTER_FIRST_ORDER: {
-            u16Filtered = ADC_Filter_FirstOrder(pstcDev, au16RawData[u16Count - 1]);
-            break;
-        }
-        
+
         default:
-            u16Filtered = au16RawData[u16Count - 1];
+            u16Filtered = u16RawLatest;
             break;
     }
     
@@ -178,7 +158,7 @@ static void ADC_Device_UpdateFilter(ADC_Device_t* pstcDev)
     pstcDev->u8ValueUpdated = 1;
     
     // ============================================================
-    // ���� JScope���Ա������� - ȡ����ֵ ����
+    // JScope调试变量更新 - 取绝对值
     // ============================================================
     if (pstcDev->stcConfig.u8Channel == 5) {
         uint16_t u16RawVoltageMv = ADC_ValueToVoltage(u16RawLatest);
@@ -190,7 +170,7 @@ static void ADC_Device_UpdateFilter(ADC_Device_t* pstcDev)
         int32_t s32RawMa = (int32_t)((int32_t)u16RawVoltageMv - 1650) * 1000 / 264;
         int32_t s32FilteredMa = (int32_t)((int32_t)u16FilteredVoltageMv - 1650) * 1000 / 264;
         
-        // ȡ����ֵ
+        // 取绝对值
         g_dbg_current_raw_ma = (s32RawMa >= 0) ? s32RawMa : -s32RawMa;
         g_dbg_current_filtered_ma = (s32FilteredMa >= 0) ? s32FilteredMa : -s32FilteredMa;
     }
@@ -278,13 +258,18 @@ DeviceResult_t ADC_Device_Init(void* handle)
     pstcDev->stcRawRing.u8Overflow = 0;
     pstcDev->u8UseRawRing = 1;
 
-    /* ���� ʹ�ú궨�������˲� ���� */
+    /* ★★★ 使用宏定义配置滤波 ★★★ */
     pstcDev->stcFilter.enType = ADC_DEFAULT_FILTER_TYPE;
     pstcDev->stcFilter.u8WindowSize = ADC_DEFAULT_FILTER_WINDOW;
     pstcDev->stcFilter.u16FilteredValue = 0;
     pstcDev->stcFilter.u32LastUpdateTime = tickTimer_GetCount();
     pstcDev->stcFilter.u16UpdateIntervalMs = ADC_DEFAULT_FILTER_INTERVAL;
-    pstcDev->stcFilter.fAlpha = ADC_DEFAULT_FILTER_ALPHA;
+
+    /* 初始化固定滑动平均窗口 */
+    pstcDev->u16MeanCount = 0;
+    pstcDev->u16MeanIndex = 0;
+    pstcDev->u32MeanSum = 0;
+    memset(pstcDev->au16MeanWindow, 0, sizeof(pstcDev->au16MeanWindow));
 
     pstcDev->u16RawValue = 0;
     pstcDev->u16VoltageMv = 0;
@@ -302,8 +287,8 @@ DeviceResult_t ADC_Device_Init(void* handle)
     pstcDev->u8Initialized = 1;
     pstcDev->u32LastUpdateTime = tickTimer_GetCount();
 
-    ADC_DEBUG("Init success: ADC_ID=%d, Filter=EMA(alpha=%.1f)\r\n", 
-              pstcDev->stcConfig.u8AdcId, pstcDev->stcFilter.fAlpha);
+    ADC_DEBUG("Init success: ADC_ID=%d, Filter=MEAN\r\n", 
+              pstcDev->stcConfig.u8AdcId);
     return RESULT_OK;
 }
 
@@ -464,15 +449,6 @@ void ADC_Device_SetFilterInterval(ADC_Device_t* pstcDev, uint16_t u16IntervalMs)
     if (pstcDev == NULL) return;
     pstcDev->stcFilter.u16UpdateIntervalMs = u16IntervalMs;
     ADC_DEBUG("Filter interval set: %d ms\r\n", u16IntervalMs);
-}
-
-void ADC_Device_SetFirstOrderAlpha(ADC_Device_t* pstcDev, float fAlpha)
-{
-    if (pstcDev == NULL) return;
-    if (fAlpha > 0.0f && fAlpha <= 1.0f) {
-        pstcDev->stcFilter.fAlpha = fAlpha;
-        ADC_DEBUG("First order alpha set: %.3f\r\n", fAlpha);
-    }
 }
 
 /* ========== Ring Buffer Operations ========== */

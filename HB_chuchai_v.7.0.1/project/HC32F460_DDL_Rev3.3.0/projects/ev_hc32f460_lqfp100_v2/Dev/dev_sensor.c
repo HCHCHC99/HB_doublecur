@@ -3,15 +3,20 @@
 #include "rtt_log.h"
 #include <string.h>
 #include <stdlib.h>
-// dev_sensor    У׼                  յ   ֵ(mA)
+
+// 经过校准和灵敏度修正后的最终电流值(mA)
 volatile int32_t g_dbg_sensor_final_ma = 0;
-// ========== ģ  ģʽȫ ֱ    ==========
+// 窗口占比判据调试变量：窗口内超过阈值的样本数与占比(%)
+volatile uint16_t g_dbg_sensor_win_over_cnt = 0;
+volatile uint8_t  g_dbg_sensor_win_over_pct = 0;
+
+// ========== 模拟模式全局变量 ==========
 #ifdef SENSOR_SIMULATION_MODE
-    // ģ    Ǵ     ԭʼ     ѹ  mV        ADC     ѹ
+    // 模拟的是传感器原始输出电压（mV），不是ADC输入电压
     static volatile uint16_t s_u16SimSensorRawMv = 1650;
     volatile uint16_t* const g_pu16DbgSimSensorRawMv = &s_u16SimSensorRawMv;
     
-    //    ݴ     ԭʼ  ѹ    ADC     ѹ     Ƿ ѹ  ·  
+    // 根据传感器原始电压计算ADC输入电压（考虑分压电路）
     static uint16_t Sensor_Sim_GetAdcVoltageMv(uint16_t u16SensorRawMv) {
 #if SENSOR_VOLTAGE_DIVIDER_ENABLE
         // V_adc = V_sensor * R2 / (R1 + R2)
@@ -21,9 +26,9 @@ volatile int32_t g_dbg_sensor_final_ma = 0;
 #endif
     }
     
-    //             ֵ    ģ  ֵ    ֱ ۵Ľӿڣ 
+    // 根据期望电流值设置模拟值（更直观的接口）
     static void Sensor_Sim_SetCurrent(int32_t s32CurrentMa) {
-        //       㣺Current ->       ԭʼ  ѹ
+        // 反向计算：Current -> 传感器原始电压
         // V_sensor = ZeroPoint + Current * Sensitivity
         int32_t s32SensorRawMv = SENSOR_RAW_ZERO_MV + 
                                   (s32CurrentMa * SENSOR_RAW_SENSITIVITY_MV_PER_A) / 1000;
@@ -37,13 +42,13 @@ volatile int32_t g_dbg_sensor_final_ma = 0;
     #define SIM_ADC_RAW_VALUE(voltage)  ((uint16_t)((uint32_t)(voltage) * 4095 / 3300))
 #endif
 
-// ==========    ٴ ӡ ==========
+// ========== 慢速打印 ==========
 #ifdef DEBUG_SENSOR_SLOW
     static uint32_t s_u32LastSlowPrintTime = 0;
     #define SLOW_PRINT_INTERVAL_MS   4000
 #endif
 
-// ==========   ʵģʽ     ==========
+// ========== 真实模式调试 ==========
 #ifdef DEV_SENSOR_REAL
     static NonBlockingDelay_t s_stcRealDbgTimer;
     static uint8_t s_u8RealDbgTimerInit = 0;
@@ -64,7 +69,7 @@ volatile int32_t g_dbg_sensor_final_ma = 0;
     }
 #endif
 
-// ==========    ڵ  Ի      ==========
+// ========== 窗口调试缓冲区 ==========
 #ifdef DEBUG_SENSOR_WINDOW_BUFFER
     volatile uint16_t g_u16DbgSensorBuffer[SENSOR_WINDOW_BUFFER_SIZE] = {0};
     volatile uint16_t g_u16DbgSensorBufIndex = 0;
@@ -97,7 +102,7 @@ volatile int32_t g_dbg_sensor_final_ma = 0;
     }
 #endif
 
-// ========== У׼  ̬     ==========
+// ========== 校准静态函数 ==========
 static void Sensor_CalibrateZeroInternal(Sensor_Device_t* pstcDev, uint16_t u16AdcVoltageMv) {
     if (!pstcDev) return;
     
@@ -112,7 +117,7 @@ static void Sensor_CalibrateZeroInternal(Sensor_Device_t* pstcDev, uint16_t u16A
                  (int)s32ZeroTheory, (int)s32ZeroMeas, (int)s32ZeroOffset);
 }
 
-// ==========        㾲̬     ==========
+// ========== 电流计算静态函数 ==========
 static int32_t Sensor_CalcCurrentInternal(Sensor_Device_t* pstcDev, uint16_t u16AdcVoltageMv) {
     if (!pstcDev) return 0;
     
@@ -149,7 +154,7 @@ static int32_t Sensor_CalcCurrentInternal(Sensor_Device_t* pstcDev, uint16_t u16
     return s32CurrentMa;
 }
 
-// ==========   ADC  ȡ     ==========
+// ========== 从ADC读取数据 ==========
 static DeviceResult_t Sensor_ReadFromAdc(Sensor_Device_t* pstcDev) {
     if (!pstcDev) return RESULT_PARAM_ERR;
     
@@ -179,7 +184,7 @@ static DeviceResult_t Sensor_ReadFromAdc(Sensor_Device_t* pstcDev) {
 #endif
 }
 
-// ==========         ==========
+// ========== 计算电流 ==========
 static void Sensor_CalcCurrent(Sensor_Device_t* pstcDev) {
     if (!pstcDev) return;
     
@@ -187,12 +192,12 @@ static void Sensor_CalcCurrent(Sensor_Device_t* pstcDev) {
     pstcDev->s16CurrentAx100 = (int16_t)(pstcDev->s32CurrentMa / 10);
     
     // ============================================================
-    //      JScope   Ա        - ȡ    ֵ     
+    // JScope调试变量更新 - 取绝对值
     // ============================================================
     g_dbg_sensor_final_ma = (pstcDev->s32CurrentMa >= 0) ? pstcDev->s32CurrentMa : -pstcDev->s32CurrentMa;
 }
 
-// ==========         -     ģʽ ==========
+// ========== 过流检测 - 点数模式 ==========
 static void Sensor_CheckOvercurrent_SampleCount(Sensor_Device_t* pstcDev, 
                                                    uint8_t u8IsOvercurrent, 
                                                    uint8_t u8IsNormal,
@@ -210,13 +215,11 @@ static void Sensor_CheckOvercurrent_SampleCount(Sensor_Device_t* pstcDev,
                 pstcAlarm->u8OvercurrentAlarm = 1;
                 pstcAlarm->u16ConsecutiveCount = 0;
                 
-                Current_AlarmEvent_t stcEvent;
-                stcEvent.s32CurrentMa = s32CurrentMa;
-                stcEvent.s32ThresholdMa = pstcCfg->s32OvercurrentThresholdMa;
-                stcEvent.u8IsActive = 1;
+                pstcAlarm->u8OcTriggerPending = 1;
+                pstcAlarm->s32PendingCurrentMa = s32CurrentMa;
+                pstcAlarm->s32PendingThresholdMa = pstcCfg->s32OvercurrentThresholdMa;
                 
                 GPIO_RESET(GPIO_LED_PORT, GPIO_LED_PIN);
-                EventBus_Publish(TOPIC_CURRENT_ALARM, &stcEvent);
             }
         } else {
             pstcAlarm->u16ConsecutiveCount = 0;
@@ -229,11 +232,9 @@ static void Sensor_CheckOvercurrent_SampleCount(Sensor_Device_t* pstcDev,
                 pstcAlarm->u16ConsecutiveCount = 0;
                 
 #if OVERCURRENT_CLEAR_MODE == OVERCURRENT_CLEAR_AUTO
-                Current_AlarmEvent_t stcEvent;
-                stcEvent.s32CurrentMa = s32CurrentMa;
-                stcEvent.s32ThresholdMa = pstcCfg->s32OvercurrentThresholdMa;
-                stcEvent.u8IsActive = 0;
-                EventBus_Publish(TOPIC_CURRENT_ALARM, &stcEvent);
+                pstcAlarm->u8OcReleasePending = 1;
+                pstcAlarm->s32PendingCurrentMa = s32CurrentMa;
+                pstcAlarm->s32PendingThresholdMa = pstcCfg->s32OvercurrentThresholdMa;
 #endif
             }
         } else if (u8IsOvercurrent) {
@@ -244,7 +245,7 @@ static void Sensor_CheckOvercurrent_SampleCount(Sensor_Device_t* pstcDev,
     }
 }
 
-// ==========         - ʱ  ģʽ ==========
+// ========== 过流检测 - 时间模式 ==========
 static void Sensor_CheckOvercurrent_TimeWindow(Sensor_Device_t* pstcDev, 
                                                  uint8_t u8IsOvercurrent, 
                                                  uint8_t u8IsNormal,
@@ -278,11 +279,9 @@ static void Sensor_CheckOvercurrent_TimeWindow(Sensor_Device_t* pstcDev,
                     pstcAlarm->u8OvercurrentAlarm = 1;
                     pstcAlarm->u8TimerRunning = 0;
                     
-                    Current_AlarmEvent_t stcEvent;
-                    stcEvent.s32CurrentMa = s32CurrentMa;
-                    stcEvent.s32ThresholdMa = pstcCfg->s32OvercurrentThresholdMa;
-                    stcEvent.u8IsActive = 1;
-                    EventBus_Publish(TOPIC_CURRENT_ALARM, &stcEvent);
+                    pstcAlarm->u8OcTriggerPending = 1;
+                    pstcAlarm->s32PendingCurrentMa = s32CurrentMa;
+                    pstcAlarm->s32PendingThresholdMa = pstcCfg->s32OvercurrentThresholdMa;
                 }
             }
         } else {
@@ -307,11 +306,9 @@ static void Sensor_CheckOvercurrent_TimeWindow(Sensor_Device_t* pstcDev,
                     pstcAlarm->u8TimerRunning = 0;
                     
 #if OVERCURRENT_CLEAR_MODE == OVERCURRENT_CLEAR_AUTO
-                    Current_AlarmEvent_t stcEvent;
-                    stcEvent.s32CurrentMa = s32CurrentMa;
-                    stcEvent.s32ThresholdMa = pstcCfg->s32OvercurrentThresholdMa;
-                    stcEvent.u8IsActive = 0;
-                    EventBus_Publish(TOPIC_CURRENT_ALARM, &stcEvent);
+                    pstcAlarm->u8OcReleasePending = 1;
+                    pstcAlarm->s32PendingCurrentMa = s32CurrentMa;
+                    pstcAlarm->s32PendingThresholdMa = pstcCfg->s32OvercurrentThresholdMa;
 #endif
                 }
             }
@@ -332,7 +329,41 @@ static void Sensor_CheckOvercurrent_TimeWindow(Sensor_Device_t* pstcDev,
     }
 }
 
-// ==========        ͳһ    ==========
+// ========== 窗口占比判据：窗口内 >= 阈值的样本占比达标即该点过流 ==========
+static uint8_t Sensor_IsOvercurrentByWindowPercent(Sensor_Device_t* pstcDev, int32_t s32ThresholdMa) {
+    if (!pstcDev) return 0;
+
+    DeviceNode_t* pstcNode = DeviceManager_Get(pstcDev->stcConfig.u8AdcDevId);
+    if (pstcNode == NULL || pstcNode->private_data == NULL) return 0;
+
+    ADC_Device_t* pstcAdc = (ADC_Device_t*)pstcNode->private_data;
+    uint16_t u16Count = pstcAdc->u16MeanCount;      /* 窗口实际样本数（未满时按实际算） */
+    if (u16Count == 0) return 0;
+
+    /* 阈值(mA) -> 原始ADC阈值（与 Sensor_CalcCurrentInternal 的换算互逆） */
+    int32_t s32Scale = pstcDev->stcCalibration.s16SensitivityScale;
+    if (s32Scale <= 0) s32Scale = 100;
+    int32_t s32ZeroTotal = SENSOR_VOUT_ZERO_MA_INT + pstcDev->stcCalibration.s32ZeroOffsetMv;
+    int64_t s64ThrMv = (int64_t)s32ZeroTotal
+                     + (int64_t)s32ThresholdMa * SENSOR_SENSITIVITY_INT * 100 / 1000 / s32Scale;
+    if (s64ThrMv < 0) s64ThrMv = 0;
+    if (s64ThrMv > 3300) s64ThrMv = 3300;
+    uint16_t u16ThrRaw = (uint16_t)(((uint32_t)s64ThrMv * 4095UL) / 3300UL);
+
+    uint16_t u16Over = 0;
+    for (uint16_t i = 0; i < u16Count; i++) {
+        if (pstcAdc->au16MeanWindow[i] >= u16ThrRaw) {
+            u16Over++;
+        }
+    }
+
+    g_dbg_sensor_win_over_cnt = u16Over;
+    g_dbg_sensor_win_over_pct = (uint8_t)(((uint32_t)u16Over * 100U) / u16Count);
+
+    return (u16Over * 100U >= u16Count * OVERCURRENT_WINDOW_PERCENT) ? 1 : 0;
+}
+
+// ========== 过流检测统一入口 ==========
 static void Sensor_CheckOvercurrent(Sensor_Device_t* pstcDev) {
     if (!pstcDev) return;
 
@@ -363,7 +394,8 @@ static void Sensor_CheckOvercurrent(Sensor_Device_t* pstcDev) {
     int32_t s32ReleaseThreshold = s32AbsThreshold - s32AbsHysteresis;
     if (s32ReleaseThreshold < 0) s32ReleaseThreshold = 0;
     
-    uint8_t u8IsOvercurrent = (s32AbsCurrent >= s32TriggerThreshold) ? 1 : 0;
+    /* 窗口占比判据：窗口内 >= 阈值的样本占比 >= OVERCURRENT_WINDOW_PERCENT(%) 即该点过流 */
+    uint8_t u8IsOvercurrent = Sensor_IsOvercurrentByWindowPercent(pstcDev, s32TriggerThreshold);
     uint8_t u8IsNormal = (s32AbsCurrent <= s32ReleaseThreshold) ? 1 : 0;
     
     if (pstcCfg->u8OvercurrentMode == OVERCURRENT_MODE_SAMPLE_COUNT) {
@@ -377,7 +409,25 @@ static void Sensor_CheckOvercurrent(Sensor_Device_t* pstcDev) {
     }
 }
 
-// ==========   ׼ 豸     ==========
+// ========== 1ms ISR 快速路径（已校准） ==========
+void Sensor_Device_UpdateIsr(Sensor_Device_t* pstcDev)
+{
+    if (!pstcDev || !pstcDev->u8Initialized || !pstcDev->u8Calibrated) return;
+    
+    /* 直接从 ADC 设备缓存读取均值结果（DeviceManager_Get 不加锁，可 ISR 调用） */
+    DeviceNode_t* pstcNode = DeviceManager_Get(pstcDev->stcConfig.u8AdcDevId);
+    if (pstcNode == NULL || pstcNode->private_data == NULL) return;
+    
+    ADC_Device_t* pstcAdc = (ADC_Device_t*)pstcNode->private_data;
+    pstcDev->u16AdcRawValue = pstcAdc->u16RawValue;
+    pstcDev->u16AdcVoltageMv = pstcAdc->u16VoltageMv;
+    
+    Sensor_CalcCurrent(pstcDev);
+    Sensor_CheckOvercurrent(pstcDev);
+    pstcDev->u32LastUpdateTime = tickTimer_GetCount();
+}
+
+// ========== 标准设备操作 ==========
 DeviceResult_t Sensor_Device_Init(void* handle) {
     Sensor_Device_t* pstcDev = (Sensor_Device_t*)handle;
     if (!pstcDev) return RESULT_PARAM_ERR;
@@ -403,7 +453,7 @@ DeviceResult_t Sensor_Device_Init(void* handle) {
     pstcDev->s32CurrentMa = 0;
     pstcDev->s16CurrentAx100 = 0;
 
-    /* 100ms average current state init */
+    /* 100ms 平均电流状态初始化 */
     pstcDev->s32AvgCurrentMa = 0;
     pstcDev->s32AvgAccumMa = 0;
     pstcDev->u32AvgSampleCnt = 0;
@@ -412,6 +462,10 @@ DeviceResult_t Sensor_Device_Init(void* handle) {
     pstcDev->stcAlarmState.u8OvercurrentAlarm = 0;
     pstcDev->stcAlarmState.u16ConsecutiveCount = 0;
     pstcDev->stcAlarmState.u8TimerRunning = 0;
+    pstcDev->stcAlarmState.u8OcTriggerPending = 0;
+    pstcDev->stcAlarmState.u8OcReleasePending = 0;
+    pstcDev->stcAlarmState.s32PendingCurrentMa = 0;
+    pstcDev->stcAlarmState.s32PendingThresholdMa = 0;
     nbDelay_Init(&pstcDev->stcAlarmState.stcTriggerTimer, 0);
     nbDelay_Init(&pstcDev->stcAlarmState.stcReleaseTimer, 0);
     
@@ -479,14 +533,7 @@ DeviceResult_t Sensor_Device_Update(void* handle) {
         return RESULT_OK;
     }
     
-    DeviceResult_t res = Sensor_ReadFromAdc(pstcDev);
-    if (res != RESULT_OK) {
-        return res;
-    }
-
-    Sensor_CalcCurrent(pstcDev);
-
-    /* 100ms average current accumulation (signed sum, for Modbus 0x2733) */
+    /* 已校准：电流计算与过流检测由 1ms 中断完成，主循环只维护 100ms 平均和调试输出 */
     pstcDev->s32AvgAccumMa += pstcDev->s32CurrentMa;
     pstcDev->u32AvgSampleCnt++;
     {
@@ -512,8 +559,6 @@ DeviceResult_t Sensor_Device_Update(void* handle) {
                        pstcDev->stcAlarmState.u8OvercurrentAlarm,
                        pstcDev->stcAlarmState.u8TimerRunning);
     }
-    
-    Sensor_CheckOvercurrent(pstcDev);
     
 #ifdef DEBUG_SENSOR_WINDOW_BUFFER
     Sensor_Debug_AddToWindow(pstcDev->u16AdcVoltageMv);
@@ -614,7 +659,7 @@ DeviceResult_t Sensor_Device_Control(void* handle, DeviceCommandData_t* pstcCmd)
     }
 }
 
-// ==========            ض  ӿ  ==========
+// ========== 电流传感器特定接口 ==========
 int32_t Sensor_Device_GetCurrentMA(Sensor_Device_t* pstcDev) {
     if (!pstcDev || !pstcDev->u8Initialized) return 0;
     return pstcDev->s32CurrentMa;
@@ -638,7 +683,7 @@ Sensor_Device_t* Sensor_Device_Create(const Sensor_Config_t* pstcConfig) {
     return pstcDev;
 }
 
-// ========== У׼ ӿ ʵ   ==========
+// ========== 校准接口实现 ==========
 void Sensor_Device_CalibrateZero(Sensor_Device_t* pstcDev) {
     if (!pstcDev || !pstcDev->u8Initialized) return;
     
@@ -666,7 +711,7 @@ void Sensor_Device_GetCalibration(Sensor_Device_t* pstcDev, Sensor_Calibration_t
     *pstcCal = pstcDev->stcCalibration;
 }
 
-// ========== ģ  ģʽ ӿ  ==========
+// ========== 模拟模式接口 ==========
 #ifdef SENSOR_SIMULATION_MODE
 void Sensor_SetSimulationValue(uint16_t u16VoltageMv) {
     s_u16SimSensorRawMv = u16VoltageMv;
@@ -681,7 +726,7 @@ uint16_t Sensor_GetSimulationSensorRawMv(void) {
 }
 #endif
 
-// ==========      澯 ֶ     ӿ  ==========
+// ========== 过流告警手动清除接口 ==========
 void Sensor_Device_ClearAlarm(Sensor_Device_t* pstcDev) {
     if (!pstcDev || !pstcDev->u8Initialized) return;
     if (!pstcDev->stcAlarmState.u8OvercurrentAlarm) return;
@@ -689,6 +734,8 @@ void Sensor_Device_ClearAlarm(Sensor_Device_t* pstcDev) {
     pstcDev->stcAlarmState.u8OvercurrentAlarm = 0;
     pstcDev->stcAlarmState.u16ConsecutiveCount = 0;
     pstcDev->stcAlarmState.u8TimerRunning = 0;
+    pstcDev->stcAlarmState.u8OcTriggerPending = 0;
+    pstcDev->stcAlarmState.u8OcReleasePending = 0;
     nbDelay_Stop(&pstcDev->stcAlarmState.stcTriggerTimer);
     nbDelay_Stop(&pstcDev->stcAlarmState.stcReleaseTimer);
     
@@ -699,7 +746,7 @@ void Sensor_Device_ClearAlarm(Sensor_Device_t* pstcDev) {
     EventBus_Publish(TOPIC_CURRENT_ALARM, &stcEvent);
 }
 
-// ========== ȫ ֲ          ==========
+// ========== 全局操作函数表 ==========
 const DeviceOps_t g_sensor_ops = {
     .init = Sensor_Device_Init,
     .deinit = Sensor_Device_Deinit,

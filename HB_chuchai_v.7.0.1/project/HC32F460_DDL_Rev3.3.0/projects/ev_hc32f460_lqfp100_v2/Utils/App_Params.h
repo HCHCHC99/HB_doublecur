@@ -123,8 +123,8 @@
 #define PARAM_DEFAULT_TARGET_ANGLE              (0)         /* 目标角度 0.1度 */
 #define PARAM_DEFAULT_VOLTAGE_UPPER_LIMIT       (270U)      /* 过压阈值 0.1V (26.0V) */
 #define PARAM_DEFAULT_VOLTAGE_LOWER_LIMIT       (210U)      /* 欠压阈值 0.1V (21.0V) */
-#define PARAM_DEFAULT_CURRENT_UPPER_LIMIT       (650)      /* 过流阈值 1mA (5A) */
-#define PARAM_DEFAULT_CURRENT_DETECT_MS         (40)        /* 过流判定时间 1ms */
+#define PARAM_DEFAULT_CURRENT_UPPER_LIMIT       (1100)      /* 过流阈值 1mA (1.1A) */
+#define PARAM_DEFAULT_CURRENT_DETECT_MS         (1U)        /* 过流判定时间 1ms */
 #define PARAM_DEFAULT_TIMEOUT_T1_S              (-1)        /* 类型1 开/关窗超时时间 秒 (-1=关闭类型1检测, 0=受理瞬间即判定) */
 #define PARAM_DEFAULT_TIMEOUT_MARGIN_S          (0)         /* 类型2/3 到角度估算余量 秒 (-1=关闭类型2/3检测, 0=纯运动时间) */
 #define PARAM_DEFAULT_MOTOR_HALL_DIR            (0)         /* 霍尔方向 0=正常, 1=反转 */

@@ -58,7 +58,7 @@ extern "C" {
 #define TMR0_CH                         (TMR0_CH_B)
 #define TMR0_PERIPH_CLK                 (FCG2_PERIPH_TMR0_1)
 #define TMR0_CLK_DIV                    (TMR0_CLK_DIV256)
-#define ADC_SAMPLE_INTERVAL_US          (1000U)
+#define ADC_SAMPLE_INTERVAL_US          (50U)
 
 /* ADC interrupt configuration */
 #define ADC_SEQA_INT_PRIO               (DDL_IRQ_PRIO_06)

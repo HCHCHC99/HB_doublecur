@@ -1,35 +1,38 @@
 /**
  *******************************************************************************
  * @file  Timer0_Unit2.c
- * @brief Timer0µ¥Ôª2µÄÖÜÆÚÖĞ¶ÏÇı¶¯ (°üº¬Í¨µÀAºÍÍ¨µÀB)
+ * @brief Timer0å•å…ƒ2çš„å‘¨æœŸä¸­æ–­é©±åŠ¨ (åŒ…å«é€šé“Aå’Œé€šé“B)
  *******************************************************************************
  */
 
 #include "Timer0_Unit2.h"
 #include "TickTimer.h"
 
+/* 1ms å¿ƒè·³ä»»åŠ¡é’©å­ï¼šé»˜è®¤ç©ºå®ç°ï¼ŒApp å±‚å¯è¦†ç›– */
+__attribute__((weak)) void TMR0_Unit2_1msTask(void) { }
+
 /*==============================================================================
- * ¾²Ì¬±äÁ¿
+ * é™æ€å˜é‡
  *============================================================================*/
 
 static uint16_t s_saved_count[2] = {0, 0};
 static uint32_t s_target_period[2] = {1000, 1000};
 
 /*==============================================================================
- * ¾²Ì¬º¯Êı
+ * é™æ€å‡½æ•°
  *============================================================================*/
 
 static void TMR0_Unit2_IRQHandler(void);
 static uint32_t TMR0_GetChannelConfig(TMR0_Channel2_t ch, uint32_t *int_src, uint32_t *int_flag, uint32_t *int_type);
 
 /*==============================================================================
- * ºê¶¨Òå
+ * å®å®šä¹‰
  *============================================================================*/
 
 #define USEC_TO_COUNT(us, clockFreqInHz) (uint16_t)(((uint64_t)(us) * (clockFreqInHz)) / 1000000U)
 
 /*==============================================================================
- * º¯ÊıÊµÏÖ
+ * å‡½æ•°å®ç°
  *============================================================================*/
 
 static uint32_t TMR0_GetChannelConfig(TMR0_Channel2_t ch, uint32_t *int_src, uint32_t *int_flag, uint32_t *int_type)
@@ -54,7 +57,7 @@ int32_t TMR0_Unit2_Init(TMR0_Channel2_t ch, uint32_t period_us, ReCount2_t cmd)
     stc_clock_freq_t stcClkFreq;
     uint32_t u32Pclk1, u32Compare;
     uint32_t timer_ch, int_src, int_flag, int_type;
-    static uint8_t s_irq_registered = 0;  /* ¾²Ì¬±äÁ¿¼ÇÂ¼ÊÇ·ñÒÑ×¢²á */
+    static uint8_t s_irq_registered = 0;  /* é™æ€å˜é‡è®°å½•æ˜¯å¦å·²æ³¨å†Œ */
     uint8_t ch_idx = (ch == TMR0_CHANNEL_A_2) ? 0 : 1;
     
     s_target_period[ch_idx] = period_us;
@@ -82,9 +85,9 @@ int32_t TMR0_Unit2_Init(TMR0_Channel2_t ch, uint32_t period_us, ReCount2_t cmd)
     TMR0_ClearStatus(TMR0_UNIT2, int_flag);
     TMR0_IntCmd(TMR0_UNIT2, int_type, ENABLE);
     
-    /* Ö»ÔÚµÚÒ»´Î³õÊ¼»¯Ê±×¢²áÖĞ¶Ï */
+    /* åªåœ¨ç¬¬ä¸€æ¬¡åˆå§‹åŒ–æ—¶æ³¨å†Œä¸­æ–­ */
     if (!s_irq_registered) {
-        stcIrqSignConfig.enIntSrc = int_src;  /* ×¢Òâ£ºÕâÀïĞèÒªÑ¡ÔñÆäÖĞÒ»¸öÖĞ¶ÏÔ´ */
+        stcIrqSignConfig.enIntSrc = int_src;  /* æ³¨æ„ï¼šè¿™é‡Œéœ€è¦é€‰æ‹©å…¶ä¸­ä¸€ä¸ªä¸­æ–­æº */
         stcIrqSignConfig.enIRQn = TMR0_UNIT2_IRQn;
         stcIrqSignConfig.pfnCallback = &TMR0_Unit2_IRQHandler;
         
@@ -177,20 +180,18 @@ static void TMR0_Unit2_IRQHandler(void)
 {
     if (TMR0_GetStatus(TMR0_UNIT2, TMR0_FLAG_CMP_A) == SET) {
         TMR0_ClearStatus(TMR0_UNIT2, TMR0_FLAG_CMP_A);
-        tickTimer_Update();  /* ¼ÙÉèÍ¨µÀAÓÃÓÚÏµÍ³ĞÄÌø */
-        
-
-        
+        tickTimer_Update();  /* å‡è®¾é€šé“Aç”¨äºç³»ç»Ÿå¿ƒè·³ */
+        TMR0_Unit2_1msTask();  /* 1mså¿ƒè·³ä»»åŠ¡é’©å­ï¼šADCå‡å€¼+ç”µæµæ£€æµ‹ */
     }
     
     if (TMR0_GetStatus(TMR0_UNIT2, TMR0_FLAG_CMP_B) == SET) {
         TMR0_ClearStatus(TMR0_UNIT2, TMR0_FLAG_CMP_B);
-        /* Í¨µÀBµÄÓÃ»§´úÂë¿ÉÒÔÔÚÕâÀïÌí¼Ó */
+        /* é€šé“Bçš„ç”¨æˆ·ä»£ç å¯ä»¥åœ¨è¿™é‡Œæ·»åŠ  */
     }
 }
 
 /*******************************************************************************
- * ÖĞ¶Ï·şÎñº¯Êı
+ * ä¸­æ–­æœåŠ¡å‡½æ•°
  ******************************************************************************/
 
 void TMR0_2_IRQHandler(void)
