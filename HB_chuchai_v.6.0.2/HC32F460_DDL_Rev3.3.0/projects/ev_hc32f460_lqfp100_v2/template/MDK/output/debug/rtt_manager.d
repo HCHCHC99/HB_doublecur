@@ -1,0 +1,10 @@
+.\output\debug\rtt_manager.o: ..\..\Utils\rtt_manager.c
+.\output\debug\rtt_manager.o: ..\..\Utils\rtt_manager.h
+.\output\debug\rtt_manager.o: ..\..\RTT\rtt_log.h
+.\output\debug\rtt_manager.o: ..\..\RTT\SEGGER_RTT.h
+.\output\debug\rtt_manager.o: ..\..\RTT\SEGGER_RTT_Conf.h
+.\output\debug\rtt_manager.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdlib.h
+.\output\debug\rtt_manager.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdarg.h
+.\output\debug\rtt_manager.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
+.\output\debug\rtt_manager.o: ..\..\Utils\TickTimer.h
+.\output\debug\rtt_manager.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdbool.h

@@ -1,0 +1,13 @@
+.\output\debug\msg_queue.o: ..\..\Utils\msg_queue.c
+.\output\debug\msg_queue.o: ..\..\Utils\msg_queue.h
+.\output\debug\msg_queue.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
+.\output\debug\msg_queue.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdbool.h
+.\output\debug\msg_queue.o: ..\..\Utils\lock.h
+.\output\debug\msg_queue.o: ..\..\Utils\rtt_manager.h
+.\output\debug\msg_queue.o: ..\..\RTT\rtt_log.h
+.\output\debug\msg_queue.o: ..\..\RTT\SEGGER_RTT.h
+.\output\debug\msg_queue.o: ..\..\RTT\SEGGER_RTT_Conf.h
+.\output\debug\msg_queue.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdlib.h
+.\output\debug\msg_queue.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdarg.h
+.\output\debug\msg_queue.o: ..\..\Utils\TickTimer.h
+.\output\debug\msg_queue.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h

@@ -1,0 +1,35 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "F:/mingw64/MinGW64-master/include/**",
+                "F:/mingw64/MinGW64-master/x86_64-w64-mingw32/include/**",
+                "F:/mingw64/MinGW64-master/lib/gcc/x86_64-w64-mingw32/13.2.0/include/**",
+                
+                // 👇 关键：添加HC32的头文件路径（改成你实际的）
+                "${workspaceFolder}/Drivers/HC32F460/inc/**",
+                // 或者如果是独立库：
+                "F:/HC32F460_DDL/driver/inc/**"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE",
+                "__MINGW32__",
+                "__MINGW64__",
+                "_WIN32",
+                "_WIN64",
+                
+                // 👇 关键：添加芯片型号宏定义！！！
+                "HC32F460"
+            ],
+            "compilerPath": "F:\\mingw64\\MinGW64-master\\bin\\gcc.exe",
+            "cStandard": "c17",
+            "cppStandard": "gnu++14",
+            "intelliSenseMode": "windows-gcc-x64"
+        }
+    ],
+    "version": 4
+}

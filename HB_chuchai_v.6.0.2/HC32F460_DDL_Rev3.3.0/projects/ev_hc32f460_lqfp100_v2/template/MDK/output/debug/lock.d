@@ -1,0 +1,12 @@
+.\output\debug\lock.o: ..\..\Utils\lock.c
+.\output\debug\lock.o: ..\..\Utils\lock.h
+.\output\debug\lock.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
+.\output\debug\lock.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdbool.h
+.\output\debug\lock.o: ..\..\Utils\rtt_manager.h
+.\output\debug\lock.o: ..\..\RTT\rtt_log.h
+.\output\debug\lock.o: ..\..\RTT\SEGGER_RTT.h
+.\output\debug\lock.o: ..\..\RTT\SEGGER_RTT_Conf.h
+.\output\debug\lock.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdlib.h
+.\output\debug\lock.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdarg.h
+.\output\debug\lock.o: ..\..\Utils\TickTimer.h
+.\output\debug\lock.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stddef.h

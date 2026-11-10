@@ -1,0 +1,20 @@
+{
+    "files.associations": {
+        "hc32f460.h": "c",
+        "system_hc32f460.h": "c",
+        "hz_timer.h": "c",
+        "hc32_ll.h": "c",
+        "main.h": "c",
+        "adapter.h": "c",
+        "hardware.h": "c",
+        "sysclk.h": "c",
+        "hc32_ll_utility.h": "c",
+        "gpio.h": "c",
+        "type_traits": "c",
+        "template_pwm.h": "c",
+        "string.h": "c",
+        "hc32_ll_tmr6.h": "c",
+        "hc32_ll_pwc.h": "c",
+        "hc32_ll_clk.h": "c"
+    }
+}

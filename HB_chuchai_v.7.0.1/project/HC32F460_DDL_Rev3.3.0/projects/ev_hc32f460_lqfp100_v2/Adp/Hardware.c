@@ -1,0 +1,296 @@
+#include "Hardware.h"
+#include "Adc.h"
+#include "Aos.h"
+#include "Dma.h"
+#include "rtt_log.h"
+
+/**
+ * ============================================================================
+ * @brief  ��ʾ���ʹ�� PA6 (ADC1_CH6) ���� ADC ����
+ *
+ *   ����ʾչʾ�����ʹ�� Adp �������ģ����Ͻ��� ADC ������
+ *   1. Adc.c/.h   - ADC �����㣺���� ADC ʵ����ʵ�ֲ���/ֹͣ
+ *   2. Aos.c/.h   - AOS �¼�·�ɲ㣺���� TMR0 ���� ADC1 �� DMA �����¼�
+ *   3. Dma.c/.h   - DMA �����㣺���� DMA ͨ����������������ж�
+ *
+ *   ������·����
+ *   TMR0 (��ʱ������) -> AOS ���� ADC1 (��ʼת��) -> AOS ���� DMA1 (�������ݵ��ڴ�)
+ *
+ *   ����ģʽ��ͨ�� ADC_USE_DMA_MODE ��ѡ��
+ *   - �ж�ģʽ��ADC ת����ɺ󴥷��жϣ����ж��ж�ȡ����
+ *   - DMAģʽ��ADC ת����ɺ��� DMA �Զ������ݰ��˵��ڴ滺����
+ * ============================================================================
+ */
+
+/* ѡ�� PA6 �Ĳ���ģʽ��1=DMAģʽ, 0=�ж�ģʽ */
+#define ADC_USE_DMA_MODE   1
+
+/* PA6 ��Ӧ�� ADC ͨ����ADC1_CH6 */
+#define PA6_ADC_CHANNEL    ADC_CH6
+#define PA6_ADC_PORT       GPIO_PORT_A
+#define PA6_ADC_PIN        GPIO_PIN_06
+
+/* PA6 �� ADC ʵ�� ID���� Adc_Create ���أ� */
+static uint8_t s_u8Pa6AdcId = 0xFF;
+
+/* PA6 �� DMA ͨ���ţ�DMAģʽʹ�ã� */
+#define PA6_DMA_CHANNEL    1   /* ʹ�� DMA1 ͨ�� 1 */
+#define PA6_DMA_BUFFER_SIZE 8  /* DMA ��������С */
+
+/* ============================================================================
+ *      1. PA6 �ж�ģʽ�ص�����
+ * ============================================================================
+ *   �ж�ģʽʹ�ö�ʱ����ÿ�� ADC ת�����ʱ���ô˻ص�������
+ * ע�⣺�ص��������ж���������ִ�У�Ӧ�������ٺ�ʱ������
+ *    �� Keil Debug ʱ���ڱ��������öϵ㣬Watch �����пɹ۲� u16Voltage ��ֵ
+ * ============================================================================ */
+static void Pa6_AdcCallback_Interrupt(uint16_t u16AdcValue)
+{
+    /* �� ADC ԭʼֵ (12bit, 0~4095) ת��Ϊ��ѹֵ (mV) */
+    uint16_t u16Voltage = (uint16_t)(((uint32_t)u16AdcValue * 3300UL) / 4095UL);
+
+    /* ���� Keil Watch �����й۲죺u16AdcValue, u16Voltage */
+    __nop(); // Debug: �ڴ˴��ϵ�鿴 PA6 �ж�ģʽ ADC ֵ
+
+    /* ע�⣺MAIN_D ���ж���Ƶ�����û�Ӱ��ʵʱ�ԣ�����ʱ��ȡ��ע�� */
+    // MAIN_D("PA6[INT] Raw=%u, %umV\r\n", u16AdcValue, u16Voltage);
+}
+
+/* ============================================================================
+ *      2. DMA ������ɻص�����
+ * ============================================================================
+ *   DMA ���һ�����ݰ��˺���á�
+ * ע�⣺�ص������� DMA �ж���������ִ�У�Ӧ�������ٺ�ʱ������
+ *    �� Keil Debug ʱ���ڱ��������öϵ㣬�۲� DMA �����������ݡ�
+ * ============================================================================ */
+static void Pa6_DmaCallback(void)
+{
+    /* �˻ص��� Dma ���� DMA ��������ж��е��� */
+    /* ʵ�����ݶ�ȡ�� main loop ��ͨ�� Adc_GetLatestValue() ���� */
+    __nop(); // Debug: �ڴ˴��ϵ㣬ȷ�� DMA �Ѵ���
+}
+
+/* ============================================================================
+ *      3. ��ʼ�� PA6 ADC �������� Hardware_Init �е��ã�
+ * ============================================================================
+ * ��������ʾ�������ĳ�ʼ�����̣�
+ *   1. ���� ADC ʵ�� (Adc_Create)
+ *   2. ��ʼ�� ADC �� DMA (Adc_Init �ڲ��Զ����)
+ *   3. ���� ADC ת�� (Adc_Start)
+ *
+ * ע�⣺AOS ��ʼ�� (AOS_Init) ��Ҫ�ڱ���������֮ǰ��ɡ�
+ *   ��Ϊ AOS_Init ������ TMR0��ADC1��DMA ���¼�·�ɡ�
+ * ============================================================================ */
+static void Pa6_Adc_Init(void)
+{
+    stc_adc_config_t stcAdcConfig;
+
+    /* ---- ���� ADC ���� ---- */
+    stcAdcConfig.u8Channel = PA6_ADC_CHANNEL;          /* ADC1_CH6 */
+    stcAdcConfig.stcPin.u8Port = PA6_ADC_PORT;         /* GPIO_PORT_A */
+    stcAdcConfig.stcPin.u8Pin = PA6_ADC_PIN;           /* GPIO_PIN_06 */
+
+#if (ADC_USE_DMA_MODE == 1)
+    /* ===== DMA ģʽ ===== */
+    stcAdcConfig.enMode = ADC_MODE_DMA;
+    stcAdcConfig.pfnCallback = NULL;                    /* DMA ģʽ����Ҫ ADC �ص� */
+    stcAdcConfig.stcDmaConfig.u16BufferSize = PA6_DMA_BUFFER_SIZE;
+    stcAdcConfig.stcDmaConfig.u8DmaChannel = PA6_DMA_CHANNEL;
+
+    MAIN_D("[PA6_ADC] Initializing PA6 (CH6) in DMA mode, DMA1 CH%d, buffer=%d\r\n",
+           PA6_DMA_CHANNEL, PA6_DMA_BUFFER_SIZE);
+#else
+    /* ===== �ж�ģʽ ===== */
+    stcAdcConfig.enMode = ADC_MODE_INTERRUPT;
+    stcAdcConfig.pfnCallback = Pa6_AdcCallback_Interrupt;
+
+    MAIN_D("[PA6_ADC] Initializing PA6 (CH6) in Interrupt mode\r\n");
+#endif
+
+    /* ---- ���� ADC ʵ�� ---- */
+    s_u8Pa6AdcId = Adc_Create(&stcAdcConfig);
+    if (s_u8Pa6AdcId == 0xFF) {
+        MAIN_D("[PA6_ADC] ERROR: Failed to create ADC instance!\r\n");
+        return;
+    }
+
+    /* ---- ��ʼ�� ADC���ڲ���ͬʱ��ʼ�� DMA�� ---- */
+    Adc_Init();
+
+    /* ---- ���� ADC ת������ TMR0 ��ʱ�������� ---- */
+    Adc_Start();
+
+    MAIN_D("[PA6_ADC] PA6 ADC initialized successfully! ADC_ID=%d\r\n", s_u8Pa6AdcId);
+}
+
+/* ============================================================================
+ *      4. main loop ��ѯ��ȡ PA6 ADC ����
+ * ============================================================================
+ * ������Ӧ�� main loop �������Ե��ã����ڻ�ȡ���µ� ADC ֵ��
+ *    �� Keil Debug ʱ���ڱ��������öϵ㣬Watch �����пɹ۲������ֵ
+ * ============================================================================ */
+void Pa6_Adc_Process(void)
+{
+    static uint32_t s_u32LastPrintMs = 0;
+    uint32_t u32Now = tickTimer_GetCount();
+
+    /* ÿ 500ms ��ӡһ�� PA6 ADC ֵ */
+    if ((u32Now - s_u32LastPrintMs) >= 500) {
+        s_u32LastPrintMs = u32Now;
+
+        if (s_u8Pa6AdcId != 0xFF) {
+            /* ��ȡ���µ� ADC ԭʼֵ */
+            uint16_t u16Raw = Adc_GetLatestValue(s_u8Pa6AdcId);
+
+            /* ת��Ϊ��ѹ (mV) */
+            uint16_t u16Voltage = (uint16_t)(((uint32_t)u16Raw * 3300UL) / 4095UL);
+
+#if (ADC_USE_DMA_MODE == 1)
+            /* DMA ģʽ�����Ի�ȡƽ��ֵ�Ͳ������� */
+            uint16_t u16Avg = Adc_GetAverageValue(s_u8Pa6AdcId);
+            uint16_t u16AvgMv = (uint16_t)(((uint32_t)u16Avg * 3300UL) / 4095UL);
+            uint32_t u32Samples = Adc_GetSampleCount(s_u8Pa6AdcId);
+
+            MAIN_D("PA6 DMA: Raw=%4u, %3umV, Avg=%4u, %3umV, Cnt=%lu\r\n",
+                   u16Raw, u16Voltage, u16Avg, u16AvgMv, u32Samples);
+#else
+            /* �ж�ģʽ */
+            MAIN_D("PA6 INT: Raw=%4u, %3umV\r\n", u16Raw, u16Voltage);
+#endif
+
+            /* ���� Keil Watch �����й۲죺u16Raw, u16Voltage */
+            __nop(); // Debug: �ڴ˴��ϵ�鿴 PA6 ADC ֵ
+        }
+    }
+}
+
+/* ============================================================================
+ *      5. AOS �¼�·��˵��
+ * ============================================================================
+ * AOS_Init() �� Hardware_Init() �б����ã������������¼�·�ɣ�
+ *
+ *     ��һ����TMR0_1 CMP_B ���� ADC1 ��ʼת��
+ *     - AOS_Connect(AOS_ADC1_0, EVT_SRC_TMR0_1_CMP_B);
+ *     - ���ú�TMR0 ��ʱ��ÿ��һ�����ڴ��� ADC1 ��ʼһ�� A ��ת��
+ *     - ��ʱƵ���� Adc.c �е� Timer0_Config(1000) ���ã�Ĭ�� 1ms
+ *
+ *     �ڶ�����ADC1 EOCA ���� DMA1 ͨ�� 1/2
+ *     - AOS_Connect(AOS_DMA1_1, EVT_SRC_ADC1_EOCA);  // ��Ӧ DMA1 CH1
+ *     - AOS_Connect(AOS_DMA1_2, EVT_SRC_ADC1_EOCA);  // ��Ӧ DMA1 CH2
+ *     - ���ú�ADC1 ת����ɺ��Զ����� DMA �����ݰ��˵��ڴ滺����
+ *
+ * ע�⣺���ʹ���ж�ģʽ (ADC_USE_DMA_MODE=0)���ڶ��� AOS ·�ɿ��Բ���Ҫ���ã�
+ *   ��Ϊ ADC �ж�ֱ�Ӷ�ȡ���ݣ�������ͨ�� AOS ���� DMA ·�ɡ�
+ *   �� AOS_Init() ��Ȼ������ DMA ·�ɣ���Ӱ���ж�ģʽ��ʹ�á�
+ * ============================================================================ */
+
+/* ============================================================================
+ *      6. DMA ����ʹ��˵��
+ * ============================================================================
+ * ʹ�� DMA ģʽʱ��Adc_Init() �ڲ����Զ�����������ã�
+ *
+ *   1. Ϊÿ�� DMA ģʽ�� ADC ʵ������ Dma_Create() ���� DMA ʵ��
+ *      - Դ��ַΪ ADC ���ݼĴ��� (ADC1->DR6)
+ *      - Ŀ���ַΪ DMA �ڲ��Զ�����Ļ��λ�����
+ *      - ���䷽��Ϊ���赽�ڴ�
+ *      - ����ģʽΪѭ�����䣨���λ���ģʽ��
+ *      - ���ݿ���Ϊ 16bit��ADC Ϊ 12bit��
+ *      - ÿ�ִ����СΪ ADC_DMA_BUFFER_SIZE��Ĭ�� 8��
+ *
+ *   2. ���� Dma_Init() ��ʼ������ DMA ͨ��
+ *      - ���� DMA ������������malloc��
+ *      - ���� DMA Ӳ���Ĵ���
+ *      - ע�� DMA ��������ж�
+ *
+ *   3. ���� Dma_StartAll() �������� DMA ͨ��
+ *      - ʹ�� DMA ͨ�����ȴ� ADC ת����ɺ󴥷�
+ *
+ *    ������������
+ *   TMR0 (1ms ��ʱ)
+ *        -> AOS ·�ɴ��� ADC1 ��ʼ A ��ת��
+ *        -> ADC1 ���� PA6 (CH6)
+ *        -> ADC1 ת����� (EOCA)
+ *        -> AOS ·�ɴ��� DMA1 CH1 ��ʼ����
+ *        -> DMA1 �� ADC1->DR6 ���ݰ��˵��ڴ滷�λ�����
+ *        -> DMA ��������ж�֪ͨ���ݾ���
+ *        -> main loop �� Pa6_Adc_Process() ��ȡ����ֵ����ӡ
+ * ============================================================================ */
+
+/* ============================================================================
+ * ԭ�еĻص�����ʾ���������ο���
+ * ============================================================================ */
+void MyAdcCallback_PA1(uint16_t u16AdcValue)
+{
+    uint16_t u16Voltage = (u16AdcValue * 3300) / 4096;
+    __nop(); // Debug: PA1 ADC �ص�
+}
+
+void MyAdcCallback_PA2(uint16_t u16AdcValue)
+{
+    uint16_t u16Voltage = (u16AdcValue * 3300) / 4096;
+    __nop(); // Debug: PA2 ADC �ص�
+}
+
+void MyAdcCallback_PA6(uint16_t u16AdcValue)
+{
+    uint16_t u16Voltage = (u16AdcValue * 3300) / 4096;
+    __nop(); // Debug: PA6 ADC �ص����ѱ� Pa6_AdcCallback_Interrupt �����
+}
+
+/* ============================================================================
+ *  Ӳ����ʼ������
+ * ============================================================================ */
+void Hardware_Init(void)
+{
+    /* 1. ϵͳ��ʱ����ʼ������Ӳ�������ִ�У� */
+    if (Systick_config() != 0) {
+        /* ��ʼ��ʧ��ʱ��ִֹͣ�У�����ԭ��PLL/ʱ��Դ��ʼ��ʧ�ܣ� */
+        while (1);
+    }
+    TMR0_Unit2_Init(TMR0_CHANNEL_A_2, 1000UL, TICK_RESET_2);
+    TMR0_Unit2_Init(TMR0_CHANNEL_B_2, 5000UL, TICK_RESET_2);
+    // TMR0_Unit1 CH_B �ѱ� Adc.c ռ��Ϊ ADC AOS Ӳ������ (200us)
+    // TMR0_Unit1_Init(TMR0_CHANNEL_B_1, 500UL, TICK_RESET_1);
+    TMR0_Unit1_Init(TMR0_CHANNEL_A_1, 1000UL, TICK_RESET_1);
+
+    tickTimer_DelayMs(150);
+    // Output_GPIO_Init(GPIO_LED_PORT, GPIO_LED_PIN, GPIO_INIT_HIGH);
+
+    /* 2. AOS �¼�·�ɲ��ʼ��
+     *     ���� TMR0��ADC1��DMA ���¼�·��
+     *     ������ ADC ��ʼ��֮ǰ��� */
+    AOS_Init();
+
+    /* 3. GPIO ��ʼ�� */
+    Output_GPIO_Init(GPIO_LED_PORT, GPIO_LED_PIN, GPIO_INIT_HIGH);
+
+    Output_GPIO_Init(PHU_PORT, PHU_PIN, GPIO_INIT_LOW);
+    Output_GPIO_Init(PHV_PORT, PHV_PIN, GPIO_INIT_LOW);
+
+    // TMR0_Unit2_Reconfig(TMR0_CHANNEL_A_2);
+    // TMR0_Unit2_Reconfig(TMR0_CHANNEL_A_1);
+    // TMR0_Unit2_Reconfig(TMR0_CHANNEL_B_2);
+    // TMR0_Unit2_Reconfig(TMR0_CHANNEL_B_1);
+    // TMR0_Unit2_Reconfig(TMR0_CHANNEL_B_2);
+    // /* 5. PA6 ADC ������ʼ��
+    //  *    ��ʾ Adc + Aos + Dma ����ģ�����ʹ�õķ���
+    //  *
+    //  *    ������·����
+    //  *      TMR0 (1ms ��ʱ)
+    //  *           -> AOS ·�ɴ��� ADC1 ��ʼ A ��ת��
+    //  *           -> ADC1 ���� PA6 (CH6)
+    //  *           -> ADC1 ת����� (EOCA)
+    //  *           -> AOS ·�ɴ��� DMA1 CH1 ��ʼ����
+    //  *           -> DMA1 �����ݰ��˵��ڴ滷�λ�����
+    //  *           -> DMA ��������ж�֪ͨ���ݾ���
+    //  *           -> main loop �� Pa6_Adc_Process() ��ȡ���ݲ���ӡ
+    //  *
+    //  *    �л�ģʽֻ���޸� ADC_USE_DMA_MODE ��
+    //  *      = 1: DMA ģʽ���Զ����ˣ�CPU �����жϵȴ�
+    //  *      = 0: �ж�ģʽ��ÿ��ת�������ж� */
+    // Pa6_Adc_Init();
+
+    // MAIN_D("[Hardware] Hardware init complete! PA6 ADC running in %s mode\r\n",
+    //        (ADC_USE_DMA_MODE ? "DMA" : "Interrupt"));
+
+}
