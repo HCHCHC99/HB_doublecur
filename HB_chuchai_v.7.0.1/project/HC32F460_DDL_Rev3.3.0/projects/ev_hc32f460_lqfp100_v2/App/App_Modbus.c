@@ -188,6 +188,8 @@ static bool IsValidRegister(uint16_t regAddr)
     case REG_VOLTAGE_UPPER_LIMIT:
     case REG_VOLTAGE_LOWER_LIMIT:
     case REG_CURRENT_UPPER_LIMIT:
+    case REG_CURRENT_OPEN_UPPER_LIMIT:
+    case REG_CURRENT_OPEN_DETECT_MS:
     case REG_CLOSE_LIMIT_ANGLE:
     case REG_OPEN_LIMIT_ANGLE:
     case REG_CURRENT_DETECT_MS:
@@ -870,6 +872,8 @@ void Modbus_SetParamDefaults(void)
     g_AppParam.voltage_lower_limit   = (uint16_t)PARAM_DEFAULT_VOLTAGE_LOWER_LIMIT;
     g_AppParam.current_upper_limit   = (uint16_t)PARAM_DEFAULT_CURRENT_UPPER_LIMIT;
     g_AppParam.current_detect_ms     = (uint16_t)PARAM_DEFAULT_CURRENT_DETECT_MS;
+    g_AppParam.current_open_upper_limit = (uint16_t)PARAM_DEFAULT_CURRENT_OPEN_UPPER_LIMIT;
+    g_AppParam.current_open_detect_ms   = (uint16_t)PARAM_DEFAULT_CURRENT_OPEN_DETECT_MS;
     g_AppParam.timeout_t1_s          = (int16_t)PARAM_DEFAULT_TIMEOUT_T1_S;
     g_AppParam.timeout_margin_s      = (int16_t)PARAM_DEFAULT_TIMEOUT_MARGIN_S;
     g_AppParam.close_limit_angle     = (int16_t)PARAM_DEFAULT_CLOSE_LIMIT_ANGLE;

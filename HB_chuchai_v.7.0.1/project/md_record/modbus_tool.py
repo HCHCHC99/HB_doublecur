@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-""" Modbus RTU 指令生成器 v4.5 (点动偏移: 0x272B开窗/0x272C关窗) """
+""" Modbus RTU 指令生成器 v4.6 (开窗/关窗独立过流判定寄存器) """
 
 def modbus_crc16(data):
     crc = 0xFFFF
@@ -16,8 +16,10 @@ SEP = "─" * 52
 VALIDATION_RULES = {
     0x2714: (250,  270,   2,  0.1, "V"),    # 过压阈值 25.0~27.0V, 步进0.2V
     0x2715: (210,  230,   2,  0.1, "V"),    # 欠压阈值 21.0~23.0V, 步进0.2V
-    0x2716: (0,    2500, 50,  1,   "mA"),   # 过流阈值 0~2500mA, 步进50mA  ← 修改这里
-    0x271E: (0,    400,  5,   1,   "ms"),   # 判定时间 0~400ms, 步进5ms
+    0x2716: (0,    2500, 50,  1,   "mA"),   # 关窗过流阈值 0~2500mA, 步进50mA
+    0x271E: (0,    400,  1,   1,   "ms"),   # 关窗过流判定时间 0~400ms, 步进1ms
+    0x272D: (0,    2500, 50,  1,   "mA"),   # 开窗过流阈值 0~2500mA, 步进50mA
+    0x272E: (0,    400,  1,   1,   "ms"),   # 开窗过流判定时间 0~400ms, 步进1ms
     0x3712: (10,  65535,  0,  0.1, ""),     # 减速比 1.0~6553.5, 单位0.1
     0x3713: (1,     100,  0,  1,   ""),     # 极对数 1~100, 不取整
     0x2726: (0,     200,  0,  0.1, "°"),    # 停止阈值 0~20.0°, 步进0.1°
@@ -54,7 +56,7 @@ def fmt_constraint(regAddr):
         return ""
     vmin, vmax, step, unit, label = rule
     parts = []
-    if vmin != 0 or regAddr in (0x2716, 0x271E):
+    if vmin != 0 or regAddr in (0x2716, 0x271E, 0x272D, 0x272E):
         parts.append(f"最小 {vmin*unit:.1f}{label}" if unit < 1 else f"最小 {vmin}{label}")
     parts.append(f"最大 {vmax*unit:.1f}{label}" if unit < 1 else f"最大 {vmax}{label}")
     if step > 0:
@@ -66,13 +68,26 @@ CONFIG_REGS = [
     (0x2710, "设备地址",           None,         "1~247"),
     (0x2714, "过压阈值",           None,         "0.1V"),
     (0x2715, "欠压阈值",           None,         "0.1V"),
-    (0x2716, "过流阈值",           None,         "mA"),
     (0x271C, "关窗极限角度",       None,         "0.1°"),
+    (0x2716, "关窗过流阈值",       None,         "mA"),
+    (0x271E, "关窗过流判定时间",   None,         "ms"),
     (0x271D, "开窗极限角度",       None,         "0.1°"),
-    (0x271E, "过流判定时间",       None,         "ms"),
+    (0x272D, "开窗过流阈值",       None,         "mA"),
+    (0x272E, "开窗过流判定时间",   None,         "ms"),
     (0x2729, "关窗过流校准上限",   None,         "0.1°"),
     (0x272A, "关窗过流校准下限",   None,         "0.1°"),
 ]
+
+# 这些寄存器前打印分隔线，按关窗/开窗/校准分组
+CONFIG_SEP_BEFORE = {0x271C, 0x271D, 0x2729}
+
+def print_config_list():
+    for i, (addr, name, opts, unit) in enumerate(CONFIG_REGS):
+        if addr in CONFIG_SEP_BEFORE:
+            print("--------------------------------")
+        u = f" [单位：{unit}]" if unit and unit != "默认1183" and unit != "默认3" else ""
+        c = fmt_constraint(addr)
+        print(f"  {i+1}. {name}（0x{addr:04X}）{u}{c}")
 
 DEV_REGS = [
     (0x3714, "霍尔脉冲累计", None,         ""),
@@ -225,10 +240,7 @@ def menu_control():
 # ===== 3. 读配置寄存器 =====
 def menu_read_config():
     print("\n====== 读配置寄存器 =====")
-    for i, (addr, name, opts, unit) in enumerate(CONFIG_REGS):
-        u = f" [单位：{unit}]" if unit and unit != "默认1183" and unit != "默认3" else ""
-        c = fmt_constraint(addr)
-        print(f"  {i+1}. {name}（0x{addr:04X}）{u}{c}")
+    print_config_list()
     print("  0. 返回")
     c = input("选择: ").strip()
     if c == '0': return
@@ -252,10 +264,7 @@ def menu_read_config():
 # ===== 4. 写配置寄存器 =====
 def menu_write_config():
     print("\n====== 写配置寄存器 =====")
-    for i, (addr, name, opts, unit) in enumerate(CONFIG_REGS):
-        u = f" [单位：{unit}]" if unit and unit != "默认1183" and unit != "默认3" else ""
-        c = fmt_constraint(addr)
-        print(f"  {i+1}. {name}（0x{addr:04X}）{u}{c}")
+    print_config_list()
     print("  0. 返回")
     c = input("选择: ").strip()
     if c == '0': return
@@ -1074,7 +1083,7 @@ def main():
     dev_key = len(MENU) + 1
     while True:
         print("\n" + "=" * 42)
-        print("  Modbus RTU 指令生成器 v4.5")
+        print("  Modbus RTU 指令生成器 v4.6")
         print("=" * 42)
         for i, (name, _) in enumerate(MENU):
             print(f"  {i+1}. {name}")

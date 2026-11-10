@@ -857,9 +857,15 @@ void Motor_OnCurrentAlarm(void* payload) {
     MotorDevice_t* motor = (MotorDevice_t*)node->private_data;
 
     if (ev->u8IsActive) {
-        /* 判断当前期望方向：正转时过流可能异常，反转时过流可能是到位堵�? */
-        /* 正转/反转都有预期工况，如阀门关闭到位时反转堵转 */
-        MotorDir_t eDesiredDir = Motor_GetDesiredDirection(motor);
+        /* 优先使用事件携带的方向；旧事件未带方向时再读电机期望方向 */
+        MotorDir_t eDesiredDir = DIR_NONE;
+        if (ev->u8Zone == SENSOR_ZONE_OPEN) {
+            eDesiredDir = DIR_FWD;
+        } else if (ev->u8Zone == SENSOR_ZONE_CLOSE) {
+            eDesiredDir = DIR_REV;
+        } else {
+            eDesiredDir = Motor_GetDesiredDirection(motor);
+        }
 
         if (eDesiredDir == DIR_FWD)
         {

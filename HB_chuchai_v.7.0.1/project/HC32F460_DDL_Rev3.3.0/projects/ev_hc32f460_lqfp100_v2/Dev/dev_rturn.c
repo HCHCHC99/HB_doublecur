@@ -15,6 +15,7 @@ static void RTurn_PublishBidirectionalOvercurrent(uint8_t u8IsActive) {
     stcEvent.s32CurrentMa = 0;
     stcEvent.s32ThresholdMa = 0;
     stcEvent.u8IsActive = u8IsActive;
+    stcEvent.u8Zone = SENSOR_ZONE_STOP;
     EventBus_Publish(TOPIC_OVERCURRENT_FWD, &stcEvent);
     EventBus_Publish(TOPIC_OVERCURRENT_REV, &stcEvent);
 }
@@ -176,8 +177,9 @@ static void RTurn_UpdateAngle(RTurn_Device_t* pstcDev) {
         
         if (!pstcDev->stcLockState.u8LockActive && u8CheckDir != RTURN_DIR_STOP && !pstcDev->u8LimitTriggered) {
             uint8_t u8Alarm = RTurn_ReadSensorAlarm(pstcDev);
+            uint8_t u8AlarmMask = (u8CheckDir == RTURN_DIR_FORWARD) ? SENSOR_ALARM_BIT_OPEN : SENSOR_ALARM_BIT_CLOSE;
             
-            if (u8Alarm) {
+            if (u8Alarm & u8AlarmMask) {
                 // 锟斤拷锟斤拷锟芥警锟揭凤拷锟斤拷锟斤拷效锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷
                 uint8_t u8LimitDir = (u8CheckDir == RTURN_DIR_FORWARD) ? RTURN_LIMIT_FORWARD : RTURN_LIMIT_REVERSE;
                 
@@ -240,8 +242,9 @@ static void RTurn_UpdateAngle(RTurn_Device_t* pstcDev) {
             // 锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟芥警状态锟斤拷锟斤拷锟斤拷锟斤拷校准状态锟斤拷
             if (u8DesiredRTurnDir != RTURN_DIR_STOP) {
                 uint8_t u8Alarm = RTurn_ReadSensorAlarm(pstcDev);
+                uint8_t u8AlarmMask = (u8DesiredRTurnDir == RTURN_DIR_FORWARD) ? SENSOR_ALARM_BIT_OPEN : SENSOR_ALARM_BIT_CLOSE;
                 
-                if (u8Alarm) {
+                if (u8Alarm & u8AlarmMask) {
                     // 锟斤拷然锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟铰凤拷锟斤拷
                     uint8_t u8NewLimitDir = (u8DesiredRTurnDir == RTURN_DIR_FORWARD) ? RTURN_LIMIT_FORWARD : RTURN_LIMIT_REVERSE;
                     
@@ -346,7 +349,7 @@ static void RTurn_UpdateAngle(RTurn_Device_t* pstcDev) {
 // ========== 锟斤拷锟斤拷锟铰硷拷锟斤拷锟斤拷 ==========
 // 锟斤拷 EventBus 锟截碉拷 RTurn_OnCurrentAlarm 锟斤拷锟斤拷
 // 锟秸碉拷锟斤拷锟斤拷锟铰硷拷锟斤拷直锟斤拷锟斤拷锟斤拷锟斤拷前锟斤拷锟斤拷锟斤拷锟津，诧拷锟斤拷锟叫讹拷锟斤拷值锟斤拷锟斤拷值锟叫讹拷锟斤拷 dev_sensor 锟斤拷锟斤拷桑锟�
-static void RTurn_HandleOvercurrent(RTurn_Device_t* pstcDev) {
+static void RTurn_HandleOvercurrent(RTurn_Device_t* pstcDev, uint8_t u8Zone) {
     if (!pstcDev) return;
     
     // 锟斤拷锟斤拷丫锟斤拷锟斤拷锟斤拷锟斤拷锟轿伙拷汛锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷馗锟斤拷锟斤拷锟�
@@ -355,9 +358,17 @@ static void RTurn_HandleOvercurrent(RTurn_Device_t* pstcDev) {
     }
     
     // 只使锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟劫诧拷锟斤拷锟斤拷锟斤拷姆锟斤拷锟斤拷锟斤拷卸锟斤拷锟轿伙拷锟斤拷锟�
-    uint8_t u8DesiredDir = MOTOR_DIRECTION_NONE;
-    RTurn_GetDesiredDirection(pstcDev, &u8DesiredDir);
-    uint8_t u8CurrentDir = RTurn_ConvertMotorDirToRTurnDir(u8DesiredDir, pstcDev->stcConfig.u8ReverseOutput);
+    uint8_t u8CurrentDir = RTURN_DIR_STOP;
+    if (u8Zone == SENSOR_ZONE_OPEN) {
+        u8CurrentDir = RTURN_DIR_FORWARD;
+    } else if (u8Zone == SENSOR_ZONE_CLOSE) {
+        u8CurrentDir = RTURN_DIR_REVERSE;
+    } else {
+        /* 兼容旧事件：事件未带方向时回退到读取电机期望方向 */
+        uint8_t u8DesiredDir = MOTOR_DIRECTION_NONE;
+        RTurn_GetDesiredDirection(pstcDev, &u8DesiredDir);
+        u8CurrentDir = RTurn_ConvertMotorDirToRTurnDir(u8DesiredDir, pstcDev->stcConfig.u8ReverseOutput);
+    }
     
     // 锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷效时锟脚达拷锟斤拷
     if (u8CurrentDir != RTURN_DIR_STOP) {
@@ -457,7 +468,7 @@ void RTurn_OnCurrentAlarm(void* payload) {
         DeviceNode_t* pstcNode = DeviceManager_Get(i);
         if (pstcNode && pstcNode->used && pstcNode->ops.init == RTurn_Device_Init) {
             RTurn_Device_t* pstcDev = (RTurn_Device_t*)pstcNode->private_data;
-            RTurn_HandleOvercurrent(pstcDev);
+            RTurn_HandleOvercurrent(pstcDev, pstcEvent->u8Zone);
             break;
         }
     }

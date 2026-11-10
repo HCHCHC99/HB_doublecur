@@ -203,6 +203,14 @@ int32_t Param_ReadByReg(uint16_t regAddr, uint16_t *pValue)
         *pValue = g_AppParam.current_detect_ms;
         break;
 
+    case REG_CURRENT_OPEN_UPPER_LIMIT:
+        *pValue = g_AppParam.current_open_upper_limit;
+        break;
+
+    case REG_CURRENT_OPEN_DETECT_MS:
+        *pValue = g_AppParam.current_open_detect_ms;
+        break;
+
     case REG_TIMEOUT_T1:
         *pValue = (uint16_t)g_AppParam.timeout_t1_s;
         break;
@@ -409,6 +417,14 @@ int32_t Param_WriteByReg(uint16_t regAddr, uint16_t value)
 
     case REG_CURRENT_DETECT_MS:
         g_AppParam.current_detect_ms = value;
+        break;
+
+    case REG_CURRENT_OPEN_UPPER_LIMIT:
+        g_AppParam.current_open_upper_limit = value;
+        break;
+
+    case REG_CURRENT_OPEN_DETECT_MS:
+        g_AppParam.current_open_detect_ms = value;
         break;
 
     case REG_TIMEOUT_T1:

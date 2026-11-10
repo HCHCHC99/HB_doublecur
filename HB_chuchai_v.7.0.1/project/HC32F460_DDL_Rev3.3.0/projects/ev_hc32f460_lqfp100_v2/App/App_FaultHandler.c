@@ -94,14 +94,20 @@ static void FaultHandler_OnCurrentAlarm(void* payload)
     
     if (pEvent->u8IsActive)
     {
-        /* 判断当前电机方向：仅正转时过流才报故障码 */
+        /* 优先使用事件携带的方向；旧事件未带方向时再读电机期望方向 */
         MotorDir_t eDesiredDir = DIR_NONE;
-        
-        DeviceNode_t* pstcMotorNode = DeviceManager_Get(ID_MOTOR);
-        if (pstcMotorNode != NULL && pstcMotorNode->private_data != NULL)
-        {
-            MotorDevice_t* pstcMotorDev = (MotorDevice_t*)pstcMotorNode->private_data;
-            eDesiredDir = Motor_GetDesiredDirection(pstcMotorDev);
+
+        if (pEvent->u8Zone == SENSOR_ZONE_OPEN) {
+            eDesiredDir = DIR_FWD;
+        } else if (pEvent->u8Zone == SENSOR_ZONE_CLOSE) {
+            eDesiredDir = DIR_REV;
+        } else {
+            DeviceNode_t* pstcMotorNode = DeviceManager_Get(ID_MOTOR);
+            if (pstcMotorNode != NULL && pstcMotorNode->private_data != NULL)
+            {
+                MotorDevice_t* pstcMotorDev = (MotorDevice_t*)pstcMotorNode->private_data;
+                eDesiredDir = Motor_GetDesiredDirection(pstcMotorDev);
+            }
         }
         
         if (eDesiredDir == DIR_FWD)
@@ -228,6 +234,7 @@ void FaultHandler_ClearFault(uint8_t u8FaultType)
                 stcReleaseEvent.s32CurrentMa = 0;
                 stcReleaseEvent.s32ThresholdMa = 0;
                 stcReleaseEvent.u8IsActive = 0;
+                stcReleaseEvent.u8Zone = SENSOR_ZONE_STOP;
                 EventBus_Publish(TOPIC_OVERCURRENT_FWD, &stcReleaseEvent);
                 EventBus_Publish(TOPIC_OVERCURRENT_REV, &stcReleaseEvent);
             }

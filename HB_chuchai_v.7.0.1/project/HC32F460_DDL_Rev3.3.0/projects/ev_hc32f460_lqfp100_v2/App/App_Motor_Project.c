@@ -340,6 +340,8 @@ static void RegisterAllDevices(void) {
         uint32_t u32TriggerMs = (uint32_t)g_AppParam.current_detect_ms;
         uint32_t u32ReleaseMs = (uint32_t)g_AppParam.current_release_ms;
         int32_t s32HysteresisMa = (int32_t)g_AppParam.current_hysteresis_ma;
+        int32_t s32OpenThresholdMa = (int32_t)g_AppParam.current_open_upper_limit;
+        uint32_t u32OpenTriggerMs = (uint32_t)g_AppParam.current_open_detect_ms;
         uint8_t u8TriggerCount = g_AppParam.overcurrent_trigger_count;
 
         // 从 Flash 读取的值可能为 0，使用默认值补充
@@ -358,28 +360,45 @@ static void RegisterAllDevices(void) {
         if (s32HysteresisMa == 0) {
             s32HysteresisMa = PARAM_DEFAULT_CURRENT_HYSTERESIS_MA;
         }
+        if (s32OpenThresholdMa <= 0) {
+            s32OpenThresholdMa = PARAM_DEFAULT_CURRENT_OPEN_UPPER_LIMIT;
+        }
+        if (u32OpenTriggerMs == 0) {
+            u32OpenTriggerMs = PARAM_DEFAULT_CURRENT_OPEN_DETECT_MS;
+        }
         if (u8TriggerCount == 0) {
             u8TriggerCount = PARAM_DEFAULT_OVERCURRENT_TRIGGER_CNT;
         }
 
-        MAIN_D("[APP] Sensor config from Flash: threshold=%ldmA, trigger_window=%ldms, release_window=%ldms, hysteresis=%ldmA, trigger_cnt=%d",
-            (long)s32ThresholdMa, (long)u32TriggerMs, (long)u32ReleaseMs, (long)s32HysteresisMa, (int)u8TriggerCount);
+        MAIN_D("[APP] Sensor config: close=%ldmA/%ldms, open=%ldmA/%ldms, release=%ldms, hysteresis=%ldmA, trigger_cnt=%d",
+            (long)s32ThresholdMa, (long)u32TriggerMs,
+            (long)s32OpenThresholdMa, (long)u32OpenTriggerMs,
+            (long)u32ReleaseMs, (long)s32HysteresisMa, (int)u8TriggerCount);
 
         Sensor_Config_t sensorCurrentCfg = {
             .u8AdcDevId = ID_ADC_CURRENT,
 
-            .s32OvercurrentThresholdMa = s32ThresholdMa,
-            .s32OvercurrentHysteresisMa = s32HysteresisMa,
+            /* 关窗专用过流判定 */
+            .stcCloseOc = {
+                .s32OvercurrentThresholdMa = s32ThresholdMa,
+                .s32OvercurrentHysteresisMa = s32HysteresisMa,
+                .u8OvercurrentMode = OVERCURRENT_MODE_TIME_WINDOW,
+                .u16TriggerWindowSize = 0,
+                .u16ReleaseWindowSize = 0,
+                .u32TriggerWindowMs = u32TriggerMs,
+                .u32ReleaseWindowMs = u32ReleaseMs,
+            },
 
-            .u8OvercurrentMode = OVERCURRENT_MODE_TIME_WINDOW,  // 使用时间窗口模式
-
-            // 计数模式参数（时间窗口模式不使用）
-            .u16TriggerWindowSize = 0,
-            .u16ReleaseWindowSize = 0,
-
-            // 时间窗口模式参数
-            .u32TriggerWindowMs = u32TriggerMs,
-            .u32ReleaseWindowMs = u32ReleaseMs,
+            /* 开窗专用过流判定：判据与关窗一致，阈值/判定时间独立 */
+            .stcOpenOc = {
+                .s32OvercurrentThresholdMa = s32OpenThresholdMa,
+                .s32OvercurrentHysteresisMa = s32HysteresisMa,
+                .u8OvercurrentMode = OVERCURRENT_MODE_TIME_WINDOW,
+                .u16TriggerWindowSize = 0,
+                .u16ReleaseWindowSize = 0,
+                .u32TriggerWindowMs = u32OpenTriggerMs,
+                .u32ReleaseWindowMs = u32ReleaseMs,
+            },
         };
         g_sensor_current_dev = Sensor_Device_Create(&sensorCurrentCfg);
         DeviceManager_Register(ID_SENSOR_CURRENT, "SensorCurrent", DEVICE_TYPE_SENSOR,
@@ -615,10 +634,8 @@ static void ProcessDeviceUpdates(void) {
 }
 
 // ========== 过流事件延迟发布（1ms ISR 检测置位，主循环发布） ==========
-static void ProcessSensorPendingEvents(void) {
-    if (g_sensor_current_dev == NULL) return;
-
-    Sensor_AlarmState_t* pstcAlarm = &g_sensor_current_dev->stcAlarmState;
+static void PublishSensorPendingAlarm(Sensor_AlarmState_t* pstcAlarm, uint8_t u8Zone) {
+    if (pstcAlarm == NULL) return;
 
     if (pstcAlarm->u8OcTriggerPending) {
         pstcAlarm->u8OcTriggerPending = 0;
@@ -626,6 +643,7 @@ static void ProcessSensorPendingEvents(void) {
         stcEvent.s32CurrentMa = pstcAlarm->s32PendingCurrentMa;
         stcEvent.s32ThresholdMa = pstcAlarm->s32PendingThresholdMa;
         stcEvent.u8IsActive = 1;
+        stcEvent.u8Zone = u8Zone;
         EventBus_Publish(TOPIC_CURRENT_ALARM, &stcEvent);
     }
 
@@ -635,8 +653,16 @@ static void ProcessSensorPendingEvents(void) {
         stcEvent.s32CurrentMa = pstcAlarm->s32PendingCurrentMa;
         stcEvent.s32ThresholdMa = pstcAlarm->s32PendingThresholdMa;
         stcEvent.u8IsActive = 0;
+        stcEvent.u8Zone = u8Zone;
         EventBus_Publish(TOPIC_CURRENT_ALARM, &stcEvent);
     }
+}
+
+static void ProcessSensorPendingEvents(void) {
+    if (g_sensor_current_dev == NULL) return;
+
+    PublishSensorPendingAlarm(&g_sensor_current_dev->stcCloseAlarmState, SENSOR_ZONE_CLOSE);
+    PublishSensorPendingAlarm(&g_sensor_current_dev->stcOpenAlarmState, SENSOR_ZONE_OPEN);
 }
 
 // ========== 1ms 心跳中断任务（TMR0_Unit2 CH A 调用） ==========
@@ -649,7 +675,20 @@ void TMR0_Unit2_1msTask(void) {
         (void)ADC_Device_Update(g_adc_voltage_dev);
     }
     if (g_sensor_current_dev != NULL) {
-        Sensor_Device_UpdateIsr(g_sensor_current_dev);
+        uint8_t u8Zone = SENSOR_ZONE_STOP;
+        Motor_StateInfo_t stcMotorState;
+
+        if (Device_Read_NoLock(ID_MOTOR, &stcMotorState, sizeof(stcMotorState)) == RESULT_OK) {
+            if (stcMotorState.desired_dir != DIR_NONE) {
+                if (RTURN_REVERSE_OUTPUT) {
+                    u8Zone = (stcMotorState.desired_dir == DIR_FWD) ? SENSOR_ZONE_CLOSE : SENSOR_ZONE_OPEN;
+                } else {
+                    u8Zone = (stcMotorState.desired_dir == DIR_FWD) ? SENSOR_ZONE_OPEN : SENSOR_ZONE_CLOSE;
+                }
+            }
+        }
+
+        Sensor_Device_UpdateIsr(g_sensor_current_dev, u8Zone);
     }
 }
 
@@ -737,19 +776,30 @@ void App_ReloadConfig(void)
     /* --- 电流传感器：重载阈值和参数 --- */
     if (g_sensor_current_dev != NULL)
     {
-        g_sensor_current_dev->stcConfig.s32OvercurrentThresholdMa =
+        g_sensor_current_dev->stcConfig.stcCloseOc.s32OvercurrentThresholdMa =
             (int32_t)g_AppParam.current_upper_limit;
-        g_sensor_current_dev->stcConfig.u32TriggerWindowMs =
+        g_sensor_current_dev->stcConfig.stcCloseOc.u32TriggerWindowMs =
             (uint32_t)g_AppParam.current_detect_ms;
-        g_sensor_current_dev->stcConfig.u32ReleaseWindowMs =
+        g_sensor_current_dev->stcConfig.stcCloseOc.u32ReleaseWindowMs =
             (uint32_t)g_AppParam.current_release_ms;
-        g_sensor_current_dev->stcConfig.s32OvercurrentHysteresisMa =
+        g_sensor_current_dev->stcConfig.stcCloseOc.s32OvercurrentHysteresisMa =
             (int32_t)g_AppParam.current_hysteresis_ma;
 
-        MAIN_D("[RELOAD] Current: threshold=%ld mA, trigger=%lu ms, release=%lu ms\r\n",
-               (long)g_sensor_current_dev->stcConfig.s32OvercurrentThresholdMa,
-               (unsigned long)g_sensor_current_dev->stcConfig.u32TriggerWindowMs,
-               (unsigned long)g_sensor_current_dev->stcConfig.u32ReleaseWindowMs);
+        g_sensor_current_dev->stcConfig.stcOpenOc.s32OvercurrentThresholdMa =
+            (int32_t)g_AppParam.current_open_upper_limit;
+        g_sensor_current_dev->stcConfig.stcOpenOc.u32TriggerWindowMs =
+            (uint32_t)g_AppParam.current_open_detect_ms;
+        g_sensor_current_dev->stcConfig.stcOpenOc.u32ReleaseWindowMs =
+            (uint32_t)g_AppParam.current_release_ms;
+        g_sensor_current_dev->stcConfig.stcOpenOc.s32OvercurrentHysteresisMa =
+            (int32_t)g_AppParam.current_hysteresis_ma;
+
+        MAIN_D("[RELOAD] Current: close=%ld mA/%lu ms, open=%ld mA/%lu ms, release=%lu ms\r\n",
+               (long)g_sensor_current_dev->stcConfig.stcCloseOc.s32OvercurrentThresholdMa,
+               (unsigned long)g_sensor_current_dev->stcConfig.stcCloseOc.u32TriggerWindowMs,
+               (long)g_sensor_current_dev->stcConfig.stcOpenOc.s32OvercurrentThresholdMa,
+               (unsigned long)g_sensor_current_dev->stcConfig.stcOpenOc.u32TriggerWindowMs,
+               (unsigned long)g_sensor_current_dev->stcConfig.stcCloseOc.u32ReleaseWindowMs);
     }
 
     /* 设备地址 (node_id) 由 Flash 存储，在 Param_Init 时已加载 */

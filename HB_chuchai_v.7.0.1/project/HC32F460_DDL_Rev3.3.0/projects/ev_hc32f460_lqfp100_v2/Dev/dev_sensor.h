@@ -82,7 +82,7 @@
 
 // ========== 窗口占比判据 ==========
 // 窗口内 >= 阈值的样本占比 >= OVERCURRENT_WINDOW_PERCENT(%) 即该点过流。
-// 50 约等于原均值判据；20 表示窗口内两成样本过线即判定。
+// 开窗与关窗使用同一判据。
 #define OVERCURRENT_WINDOW_PERCENT        (20U)
 
 // ========== 过流告警清除模式选择 ==========
@@ -92,6 +92,15 @@
 #ifndef OVERCURRENT_CLEAR_MODE
 #define OVERCURRENT_CLEAR_MODE      OVERCURRENT_CLEAR_MANUAL   
 #endif
+
+// ========== 判定方向（zone） ==========
+#define SENSOR_ZONE_STOP             0U
+#define SENSOR_ZONE_OPEN             1U   /* 开窗（正转） */
+#define SENSOR_ZONE_CLOSE            2U   /* 关窗（反转） */
+
+// ========== 报警状态位（CMD_SENSOR_GET_ALARM_STATUS 返回值） ==========
+#define SENSOR_ALARM_BIT_CLOSE       0x01U
+#define SENSOR_ALARM_BIT_OPEN        0x02U
 
 // ========== DEBUG 窗口缓冲区 ==========
 #define DEBUG_SENSOR_WINDOW_BUFFER
@@ -140,9 +149,8 @@ typedef struct {
     int32_t s32CalibrationValid;
 } Sensor_Calibration_t;
 
-// ========== 传感器设备配置 ==========
+// ========== 单套过流判定配置 ==========
 typedef struct {
-    uint8_t     u8AdcDevId;
     int32_t     s32OvercurrentThresholdMa;
     int32_t     s32OvercurrentHysteresisMa;
     uint8_t     u8OvercurrentMode;
@@ -150,9 +158,16 @@ typedef struct {
     uint16_t    u16ReleaseWindowSize;
     uint32_t    u32TriggerWindowMs;
     uint32_t    u32ReleaseWindowMs;
+} Overcurrent_Config_t;
+
+// ========== 传感器设备配置 ==========
+typedef struct {
+    uint8_t     u8AdcDevId;
+    Overcurrent_Config_t stcCloseOc;   /* 关窗专用过流判定 */
+    Overcurrent_Config_t stcOpenOc;    /* 开窗专用过流判定 */
 } Sensor_Config_t;
 
-// ========== 告警状态结构 ==========
+// ========== 单套告警状态 ==========
 typedef struct {
     uint8_t  u8OvercurrentAlarm;
     uint16_t u16ConsecutiveCount;
@@ -170,6 +185,7 @@ typedef struct {
     int32_t  s32CurrentMa;
     int32_t  s32ThresholdMa;
     uint8_t  u8IsActive;
+    uint8_t  u8Zone;                       /* SENSOR_ZONE_xxx */
 } Current_AlarmEvent_t;
 
 // ========== 传感器设备结构体 ==========
@@ -181,7 +197,8 @@ typedef struct {
     uint16_t            u16AdcVoltageMv;
     int32_t             s32CurrentMa;
     int16_t             s16CurrentAx100;
-    Sensor_AlarmState_t stcAlarmState;
+    Sensor_AlarmState_t stcCloseAlarmState; /* 关窗判定状态 */
+    Sensor_AlarmState_t stcOpenAlarmState;  /* 开窗判定状态 */
     uint32_t            u32LastUpdateTime;
     uint8_t             u8Calibrated;
     uint32_t            u32InitTime;
@@ -214,7 +231,7 @@ DeviceResult_t Sensor_Device_Read(void* handle, void* data, uint32_t size);
 DeviceResult_t Sensor_Device_Write(void* handle, const void* data, uint32_t size);
 DeviceResult_t Sensor_Device_Control(void* handle, DeviceCommandData_t* cmd);
 DeviceResult_t Sensor_Device_Update(void* handle);
-void Sensor_Device_UpdateIsr(Sensor_Device_t* pstcDev);   /* 1ms ISR快速路径：已校准后由中断调用 */
+void Sensor_Device_UpdateIsr(Sensor_Device_t* pstcDev, uint8_t u8Zone);   /* 1ms ISR快速路径 */
 
 // ========== 传感器取值接口 ==========
 int32_t Sensor_Device_GetCurrentMA(Sensor_Device_t* pstcDev);
